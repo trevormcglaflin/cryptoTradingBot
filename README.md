@@ -1,7 +1,7 @@
 Crypto Trading Bot
 Collaborators: Trevor McGlaflin and Qin Quan Lin
 
-The Goal
+The Goal 
 The goal of this project is to create a crypto trading bot that places
 automatic buy and sell orders through coinbase API. It will be a very short
 term trading strategy that uses candlesticks and volumes, as well as trend

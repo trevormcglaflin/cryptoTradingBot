@@ -1,5 +1,5 @@
 from coinbase.wallet.client import Client
-from time import sleep
+import time
 from constants import sandbox_api_passphrase, sandbox_api_public, sandbox_api_secret
 import constants
 import cbpro
@@ -69,7 +69,7 @@ currencies = public_client.get_currencies()
 
 # this returns time in normal time format and epoch (which is the funky time)
 # it will actually be useful to have the epoch time
-time = public_client.get_time()
+curr_time = public_client.get_time()
 
 # AUTHENTICATED CLIENT METHODS
 
@@ -104,6 +104,8 @@ account_history = auth_client.get_account_history(bitcoin_id)
 account_holds = auth_client.get_account_holds(bitcoin_id)
 
 # PLACING ORDERS
+# here is link explaining the different types of orders
+# https://help.coinbase.com/en/pro/trading-and-funding/orders/overview-of-order-types-and-settings-stop-limit-market.html
 
 # limit orders
 
@@ -117,7 +119,7 @@ account_holds = auth_client.get_account_holds(bitcoin_id)
 # OR
 #auth_client.place_limit_order(product_id='BTC-USD',
                               #side='buy',
-                              #price='50000',
+                              #price='20000',
                               #size='0.05')
 
 
@@ -156,6 +158,163 @@ account_holds = auth_client.get_account_holds(bitcoin_id)
 #auth_client.place_market_order(product_id='BTC-USD',
                                #side='sell',
                                #funds='100.00')
+
+# place a stop order
+# A stop limit order will automatically post a limit order at the limit price when the stop price is triggered.
+# Note that your stop order will be triggered instantly if the stop price you specified was already met
+#auth_client.place_stop_order(product_id='BTC-USD',
+                              #side='buy',
+                              #price='31000',
+                              #funds="200.00")
+
+
+# cancelling orders
+# the parameter is the order id
+#auth_client.cancel_order(order_id)
+
+# to cancel all orders
+#auth_client.cancel_all(product_id='BTC-USD')
+
+# to get an order
+# returns a generator
+# each order has { id, price, size, product_id, side, created_at, status }
+#orders = auth_client.get_orders()
+#auth_client.get_order("d50ec984-77a8-460a-b958-66f114b0de9b")
+
+
+# THE WEBSOCKET FEED
+
+# the websocket feed lets you view real time market data very efficiently
+
+# to subscribe to a particular object
+wsClient = cbpro.WebsocketClient(url="wss://ws-feed.pro.coinbase.com", products="BTC-USD")
+
+# you will always want to override these methods for some reason
+# we must override these three methods for some reason
+prices = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+buy_prices = []
+sell_prices = []
+bought = False
+total_buys = 0
+total_sells = 0
+gains = 0
+actual_gains = 0
+start_balance = 5000
+TAKER_FEE = 0.002
+MAKER_FEE = 0.001
+PERCENT_TO_BUY = 0.15
+class myWebsocketClient(cbpro.WebsocketClient):
+
+    # called when we open the webSocketClient
+    def on_open(self):
+        self.url = "wss://ws-feed.pro.coinbase.com/"
+        self.products = "BTC-USD"
+        self.channels = ["ticker"]  # ticker, heartbeat, level2
+        print("BTC-USD Trading Bot has begun!")
+
+    # what to do for each row of data that is reserved to our client from the websocket source (server)
+    def on_message(self, msg):
+        global prices, bought, total_buys, total_sells, gains, actual_gains
+        try:
+            prices.append(float(msg['price']))
+            time.sleep(5)
+            print("boom")
+        except:
+            pass
+
+
+        if self.get_buy_trigger_price(10) > prices[-1] and not bought:
+            print("Buy at " + str(prices[-1]))
+            buy_prices.append(prices[-1])
+            auth_client.buy(size=PERCENT_TO_BUY,
+                            order_type='market',
+                            product_id="BTC-USD")
+            bought = True
+            total_buys += 1
+        if bought and prices[-1] > (buy_prices[-1] + 25):
+            print("Sold at " + str(prices[-1]))
+            sell_prices.append(prices[-1])
+            auth_client.sell(size=PERCENT_TO_BUY,
+                            order_type='market',
+                            product_id="BTC-USD")
+
+            print("BUY PRICE", buy_prices[-1] * PERCENT_TO_BUY)
+            print("SELL PRICE", sell_prices[-1] * PERCENT_TO_BUY)
+            print("Margin without fee", self.simple_return(buy_prices[-1] * PERCENT_TO_BUY, sell_prices[-1] * PERCENT_TO_BUY))
+            print("Margin with fee", self.calculate_dollar_return(buy_prices[-1] * PERCENT_TO_BUY, sell_prices[-1] * PERCENT_TO_BUY))
+            print()
+            gains += self.simple_return(buy_prices[-1] * PERCENT_TO_BUY, sell_prices[-1] * PERCENT_TO_BUY)
+            actual_gains += self.calculate_dollar_return(buy_prices[-1] * PERCENT_TO_BUY, sell_prices[-1] * PERCENT_TO_BUY)
+            bought = False
+            total_sells += 1
+
+
+
+
+    def get_prior_avg(self, time_span):
+        sum = 0
+        for price in prices[-time_span:]:
+            sum += price
+        return sum/time_span
+
+    def get_buy_trigger_price(self, time_span):
+        last_x_prices = prices[-time_span:]
+        last_x_prices.sort()
+        return last_x_prices[2]
+
+
+    def simple_return(self, start_price, end_price):
+        return end_price-start_price
+
+    def calculate_dollar_return(self, buy_price, sell_price, is_market_order=True):
+        no_fee_return = sell_price - buy_price
+        if is_market_order:
+            fee = (buy_price * TAKER_FEE) + (sell_price * TAKER_FEE)
+        else:
+            fee = (buy_price * MAKER_FEE) + (sell_price * MAKER_FEE)
+        return no_fee_return - fee
+
+
+
+    # lets grab our results when we decide to close our websocket connection
+    def on_close(self):
+        print("ending...")
+        print("------------ Results ------------\n")
+        print("Total Buys: ", total_buys)
+        print("Total Sells: ", total_sells)
+        print("Start balance: ", start_balance)
+        print("Total Dollar Gain Without Fees: ", gains)
+        print("End balance Without Fees: ", start_balance + gains)
+        print("Total percent gain Without Fees", ((start_balance+gains)-start_balance)/start_balance)
+        print("Total Dollar Gain With Fees: ", actual_gains)
+        print("End balance With Fees: ", start_balance + actual_gains)
+        print("Total percent gain With Fees", ((start_balance + actual_gains) - start_balance) / start_balance)
+        print("ending...")
+
+        #results = pd.DataFrame(dict([(k, pd.Series(v)) for k, v in order_book.items()]))
+        #results['returnsBeforeFees'] = results.quantityPriceSELL - results.quantityPriceBUY
+        #results[
+            #'returnsAfterFees'] = results.quantityPriceSELL - results.quantityPriceBUY - results.feeBUY - results.feeSELL
+        #print('\n Total returns before Fees: ', results.returnsBeforeFees.sum())
+        #print('\n Total returns after Fees: ', results.returnsAfterFees.sum())
+        # print(prices)
+
+wsClient = myWebsocketClient()
+wsClient.start()
+print(wsClient.url, wsClient.products)
+
+
+
+message_count = 0
+while (message_count < 200):
+    message_count += 1
+    time.sleep(1)
+wsClient.close()
+
+
+
+
+
 
 
 
