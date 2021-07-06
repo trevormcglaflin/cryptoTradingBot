@@ -45,6 +45,7 @@ class myWebsocketClient(cbpro.WebsocketClient):
             prices.append(float(msg['price']))
             time.sleep(2)
             print("boom")
+
         except:
             pass
 
